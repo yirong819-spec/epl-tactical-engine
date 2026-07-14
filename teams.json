@@ -1,0 +1,19 @@
+{
+  "Man City": {
+    "Tier": 1,
+    "Style": "Control",
+    "P_Retention": 0.95,
+    "P_Pressing": 0.60,
+    "P_Transition": 0.75,
+    "P_Stability": 0.85
+  },
+  "Liverpool": {
+    "Tier": 1,
+    "Style": "Pressing",
+    "P_Retention": 0.70,
+    "P_Pressing": 0.95,
+    "P_Transition": 0.90,
+    "P_Stability": 0.75
+  }
+}
+
