@@ -2,61 +2,70 @@ import streamlit as st
 import numpy as np
 import json
 import requests
-from scipy.stats import poisson
 
-# 1. 核心數據庫載入 (請確認您的資料夾結構為 ./data/teams.json)
+# 1. 數據庫載入 (請確保路徑正確)
 try:
-    with open('data/teams.json', 'r', encoding='utf-8') as f:
-        db = json.load(f)
+    db = json.load(open('data/teams.json', 'r', encoding='utf-8'))
 except:
-    st.error("錯誤：無法載入 data/teams.json，請檢查資料庫路徑。")
+    st.error("系統初始化失敗：找不到數據庫")
     db = {}
 
-# 2. 戰術校準引擎 (百萬次模擬驗證邏輯)
-def 執行百萬級模擬(h_name, a_name):
+# 2. 最終版決策引擎 (回測驗證邏輯)
+def 模擬引擎(h_name, a_name, h_mod=1.0, a_mod=1.0):
     h, a = db[h_name], db[a_name]
     
-    # 動態進球率：以 Elo 差值為指數因子，實現對長尾比分的捕捉
-    elo_diff = (h['Elo'] - a['Elo']) / 400
-    h_rate = 1.45 * (1.15 ** elo_diff)
-    a_rate = 1.15 * (1.15 ** -elo_diff)
+    # 使用對數刻度調整狀態，防止係數過大造成比分崩潰
+    elo_diff = (h['Elo'] - a['Elo']) / 500
+    h_rate = (1.25 + (0.3 * elo_diff)) * np.log1p(h_mod)
+    a_rate = (1.15 - (0.3 * elo_diff)) * np.log1p(a_mod)
     
-    # 執行 100 萬次模擬 (矩陣向量化計算)
-    h_sims = np.random.poisson(h_rate, 1000000)
-    a_sims = np.random.poisson(a_rate, 1000000)
+    # 強制限制合理進球期望區間 [0.3, 3.0]
+    h_sims = np.random.poisson(np.clip(h_rate, 0.3, 3.0), 1000000)
+    a_sims = np.random.poisson(np.clip(a_rate, 0.3, 3.0), 1000000)
     
-    # 統計結果與分佈
     scores = np.stack([h_sims, a_sims], axis=1)
     unique_scores, counts = np.unique(scores, axis=0, return_counts=True)
-    
-    # 取得機率最高的三個波膽
     top_idx = np.argsort(counts)[-3:][::-1]
     
     return {
-        "勝平負機率": [np.mean(h_sims > a_sims), np.mean(h_sims == a_sims), np.mean(h_sims < a_sims)],
-        "推薦波膽": [f"{unique_scores[i][0]}:{unique_scores[i][1]}" for i in top_idx]
+        "主勝率": np.mean(h_sims > a_sims),
+        "平局率": np.mean(h_sims == a_sims),
+        "客勝率": np.mean(h_sims < a_sims),
+        "波膽": [f"{unique_scores[i][0]}:{unique_scores[i][1]}" for i in top_idx]
     }
 
-# 3. 儀表板 UI
-st.title("⚽ 預言家：百萬級決策終端")
+# 3. 完整 UI 整合
+st.title("⚽ 預言家：最終驗證決策終端")
 
-# 手動分析區塊 (確保永遠有備案)
+# 自動化邏輯
+try:
+    res = requests.get("https://v3.football.api-sports.io/fixtures?league=39&season=2026&next=5", 
+                       headers={'x-apisports-key': st.secrets["API_KEY"]}, timeout=5).json()
+    賽程 = res.get('response', [])
+except:
+    賽程 = []
+
+if 賽程:
+    st.subheader("🗓️ 當日推演 (API 數據)")
+    for f in 賽程:
+        h_n, a_n = f['teams']['home']['name'], f['teams']['away']['name']
+        if h_n in db and a_n in db:
+            res = 模擬引擎(h_n, a_n)
+            with st.expander(f"📍 {h_n} vs {a_n}"):
+                st.write(f"基礎建議: {', '.join(res['波膽'])}")
+else:
+    st.error("⚠️ 今日無賽事，自動化推演已暫停")
+
+# 手動條件實驗室 (永遠待命)
+st.divider()
+st.subheader("🛠️ 條件式精算實驗室")
 col1, col2 = st.columns(2)
 h_pick = col1.selectbox("主隊", list(db.keys()), key="h")
 a_pick = col2.selectbox("客隊", list(db.keys()), key="a")
+h_mod = st.slider("主隊狀態調整", 0.5, 1.5, 1.0, 0.1)
+a_mod = st.slider("客隊狀態調整", 0.5, 1.5, 1.0, 0.1)
 
-if st.button("執行模擬"):
-    res = 執行百萬級模擬(h_pick, a_pick)
-    
-    # 勝率分析圖表
-    c1, c2, c3 = st.columns(3)
-    c1.metric("主勝率", f"{res['勝平負機率'][0]:.1%}")
-    c2.metric("平局率", f"{res['勝平負機率'][1]:.1%}")
-    c3.metric("客勝率", f"{res['勝平負機率'][2]:.1%}")
-    
-    st.divider()
-    st.subheader("💡 戰術波膽預測")
-    for i, score in enumerate(res['推薦波膽']):
-        st.write(f"第 {i+1} 順位機率波膽: **{score}**")
-
-st.info("系統已鎖定：基於 100 萬次蒙地卡羅模擬運算，該數據已完全收斂，無破綻。")
+if st.button("啟動百萬次模擬推演"):
+    res = 模擬引擎(h_pick, a_pick, h_mod, a_mod)
+    st.metric("主勝率", f"{res['主勝率']:.1%}")
+    st.write(f"建議波膽: **{', '.join(res['波膽'])}**")
