@@ -1,41 +1,51 @@
 import streamlit as st
 import numpy as np
 import json
+import requests
 from scipy.stats import poisson
 
-# 讀取並初始化數據庫
+# 載入數據
 db = json.load(open('data/teams.json', 'r', encoding='utf-8'))
 
-def 執行動態預測(h_name, a_name):
+def 執行預測邏輯(h_name, a_name):
     h, a = db[h_name], db[a_name]
-    
-    # 期望勝率計算 (Elo 轉化)
     expected_h = 1 / (1 + 10 ** ((a['Elo'] - h['Elo']) / 400))
-    
-    # 泊松期望值 (基於 Elo 強度)
-    h_rate = (h['Elo'] / 1800) * 1.5 * 1.1 
+    h_rate = (h['Elo'] / 1800) * 1.5 
     a_rate = (a['Elo'] / 1800) * 1.2
-    
     matrix = np.outer(poisson.pmf(np.arange(6), h_rate), poisson.pmf(np.arange(6), a_rate))
-    
-    return {
-        "勝率": expected_h,
-        "波膽": f"{np.unravel_index(np.argmax(matrix), matrix.shape)[0]}:{np.unravel_index(np.argmax(matrix), matrix.shape)[1]}",
-        "大分率": np.sum(matrix[3:, :]) + np.sum(matrix[:, 3:])
-    }
+    return expected_h, f"{np.unravel_index(np.argmax(matrix), matrix.shape)[0]}:{np.unravel_index(np.argmax(matrix), matrix.shape)[1]}"
 
-st.title("⚽ 預言家：動態演化引擎")
-h_pick = st.selectbox("主隊", list(db.keys()))
-a_pick = st.selectbox("客隊", list(db.keys()))
+st.title("⚽ 預言家：自動化賽事分析儀")
 
-if st.button("啟動模擬"):
-    res = 執行動態預測(h_pick, a_pick)
-    st.metric(f"{h_pick} 勝率", f"{res['勝率']:.1%}")
-    st.write(f"建議波膽：**{res['波膽']}** | 大分機率：{res['大分率']:.1%}")
-    
-    # 這裡預留動態更新介面，您可以手動修正結果後的 Elo
-    if st.checkbox("結果與預測不符？手動更新 Elo"):
-        actual = st.radio("真實結果", ["主勝", "客勝", "平局"])
-        if st.button("提交校準"):
-            # 這裡會觸發 Elo K-factor 更新邏輯，更新您的 JSON 數據
-            st.success("Elo 已根據您的反饋進行演化修正。")
+# 1. 優先執行 API 自動化流程
+api_key = st.secrets.get("API_KEY")
+try:
+    # 嘗試抓取今日賽事 (next=5)
+    res = requests.get("https://v3.football.api-sports.io/fixtures?league=39&season=2026&next=5", 
+                       headers={'x-apisports-key': api_key}).json()
+    賽程 = res.get('response', [])
+except:
+    賽程 = []
+
+if 賽程:
+    st.subheader("🗓️ 今日自動推演結果")
+    for f in 賽程:
+        h_name = f['teams']['home']['name'] # 注意：這裡可能需要翻譯映射
+        a_name = f['teams']['away']['name']
+        
+        # 僅當隊伍存在於您的 JSON 資料庫時才執行
+        if h_name in db and a_name in db:
+            勝率, 波膽 = 執行預測邏輯(h_name, a_name)
+            with st.expander(f"{h_name} vs {a_name}"):
+                st.metric("勝率", f"{勝率:.1%}")
+                st.write(f"建議波膽：{波膽}")
+else:
+    # 2. 只有在無賽事時才開啟手動模式
+    st.warning("今日無官方聯賽賽事，切換至手動實驗室")
+    col1, col2 = st.columns(2)
+    h_pick = col1.selectbox("選擇主隊", list(db.keys()))
+    a_pick = col2.selectbox("選擇客隊", list(db.keys()))
+    if st.button("啟動精算"):
+        勝率, 波膽 = 執行預測邏輯(h_pick, a_pick)
+        st.metric(f"{h_pick} 勝率", f"{勝率:.1%}")
+        st.write(f"建議波膽：{波膽}")
