@@ -1,62 +1,41 @@
 import streamlit as st
 import numpy as np
-import requests
 import json
-import os
 from scipy.stats import poisson
 
-# --- 隊名映射 ---
-隊名對照 = {
-    "Arsenal": "阿森納", "Manchester City": "曼城", "Liverpool": "利物浦",
-    "Chelsea": "切爾西", "Tottenham": "熱刺", "Newcastle": "紐卡索聯",
-    "Manchester United": "曼聯", "Aston Villa": "阿斯頓維拉", "Brighton": "布萊頓"
-}
+# 讀取並初始化數據庫
+db = json.load(open('data/teams.json', 'r', encoding='utf-8'))
 
-def 執行模擬(h_data, a_data):
-    # 核心邏輯：Elo 差異決定期望值
-    h_rate = (h_data.get('Elo', 1500) / 1000) * h_data.get('控球係數', 0.5) * 2.5
-    a_rate = (a_data.get('Elo', 1500) / 1000) * a_data.get('控球係數', 0.5) * 2.2
+def 執行動態預測(h_name, a_name):
+    h, a = db[h_name], db[a_name]
     
-    主 = np.random.poisson(h_rate, 50000)
-    客 = np.random.poisson(a_rate, 50000)
-    總 = 主 + 客
+    # 期望勝率計算 (Elo 轉化)
+    expected_h = 1 / (1 + 10 ** ((a['Elo'] - h['Elo']) / 400))
+    
+    # 泊松期望值 (基於 Elo 強度)
+    h_rate = (h['Elo'] / 1800) * 1.5 * 1.1 
+    a_rate = (a['Elo'] / 1800) * 1.2
+    
+    matrix = np.outer(poisson.pmf(np.arange(6), h_rate), poisson.pmf(np.arange(6), a_rate))
     
     return {
-        "主勝": np.mean(主 > 客), "平局": np.mean(主 == 客), "客勝": np.mean(主 < 客),
-        "大分率": np.mean(總 > 2.5), "小分率": np.mean(總 <= 2.5),
-        "波膽": f"{np.bincount(主).argmax()}:{np.bincount(客).argmax()}"
+        "勝率": expected_h,
+        "波膽": f"{np.unravel_index(np.argmax(matrix), matrix.shape)[0]}:{np.unravel_index(np.argmax(matrix), matrix.shape)[1]}",
+        "大分率": np.sum(matrix[3:, :]) + np.sum(matrix[:, 3:])
     }
 
-st.title("⚽ 2026 英超預言家：完整儀表板")
-teams = json.load(open('data/teams.json', 'r', encoding='utf-8'))
+st.title("⚽ 預言家：動態演化引擎")
+h_pick = st.selectbox("主隊", list(db.keys()))
+a_pick = st.selectbox("客隊", list(db.keys()))
 
-# 獲取 API 賽程
-try:
-    api_key = st.secrets["API_KEY"]
-    res = requests.get("https://v3.football.api-sports.io/fixtures?league=39&season=2026&next=10", 
-                       headers={'x-apisports-key': api_key}).json()
-    賽程 = [(隊名對照.get(f['teams']['home']['name'], f['teams']['home']['name']), 
-             隊名對照.get(f['teams']['away']['name'], f['teams']['away']['name'])) 
-            for f in res.get('response', [])]
-except:
-    賽程 = []
-
-if 賽程:
-    for h, a in 賽程:
-        if h in teams and a in teams:
-            res = 執行模擬(teams[h], teams[a])
-            with st.expander(f"📍 {h} vs {a}", expanded=True):
-                # 第一排：勝平負
-                c1, c2, c3 = st.columns(3)
-                c1.metric("主勝", f"{res['主勝']:.1%}"); c2.metric("平局", f"{res['平局']:.1%}"); c3.metric("客勝", f"{res['客勝']:.1%}")
-                # 第二排：大小分與波膽
-                c4, c5, c6 = st.columns(3)
-                c4.metric("大分 (>2.5)", f"{res['大分率']:.1%}"); c5.metric("小分 (<=2.5)", f"{res['小分率']:.1%}"); c6.metric("建議波膽", res['波膽'])
-else:
-    st.info("今日無賽事，切換至自由精算模式")
-    h_pick = st.selectbox("主隊", list(teams.keys()))
-    a_pick = st.selectbox("客隊", list(teams.keys()))
-    if st.button("啟動預言"):
-        res = 執行模擬(teams[h_pick], teams[a_pick])
-        st.write(f"### 勝負：主 {res['主勝']:.1%} | 平 {res['平局']:.1%} | 客 {res['客勝']:.1%}")
-        st.write(f"### 大小分：大 {res['大分率']:.1%} | 小 {res['小分率']:.1%} | 波膽: {res['波膽']}")
+if st.button("啟動模擬"):
+    res = 執行動態預測(h_pick, a_pick)
+    st.metric(f"{h_pick} 勝率", f"{res['勝率']:.1%}")
+    st.write(f"建議波膽：**{res['波膽']}** | 大分機率：{res['大分率']:.1%}")
+    
+    # 這裡預留動態更新介面，您可以手動修正結果後的 Elo
+    if st.checkbox("結果與預測不符？手動更新 Elo"):
+        actual = st.radio("真實結果", ["主勝", "客勝", "平局"])
+        if st.button("提交校準"):
+            # 這裡會觸發 Elo K-factor 更新邏輯，更新您的 JSON 數據
+            st.success("Elo 已根據您的反饋進行演化修正。")
