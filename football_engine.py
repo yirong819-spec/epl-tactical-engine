@@ -1,33 +1,26 @@
 import numpy as np
 import json
+import os
+from scipy.stats import poisson
 
-class 戰術決策引擎:
-    def __init__(self, data_path='data/teams.json'):
-        try:
-            with open(data_path, 'r', encoding='utf-8') as f:
-                self.隊伍數據 = json.load(f)
-        except Exception:
-            # 防禦機制：資料載入失敗回退方案
-            self.隊伍數據 = {"範例隊": {"風格": "平衡", "控球係數": 0.7, "逼搶強度": 0.7}}
+class 戰略預測引擎:
+    def __init__(self):
+        with open('data/teams.json', 'r', encoding='utf-8') as f:
+            self.teams = json.load(f)
 
-    def 計算戰術相剋(self, 風格甲, 風格乙):
-        相剋表 = {("傳控", "逼搶"): 0.8, ("逼搶", "防反"): 0.9, ("防反", "傳控"): 1.1}
-        return 相剋表.get((風格甲, 風格乙), 1.0)
-
-    def 蒙地卡羅模擬(self, 主隊名, 客隊名, 主傷, 客傷, 主疲, 客疲):
-        主隊 = self.隊伍數據.get(主隊名, {"風格": "平衡", "控球係數": 0.7})
-        客隊 = self.隊伍數據.get(客隊名, {"風格": "平衡", "控球係數": 0.7})
-
-        # 應用十大精算條件之傷停與疲勞權重
-        主權重 = 主隊['控球係數'] * (0.85 if 主傷 else 1.0) * (0.9 if 主疲 else 1.0)
-        客權重 = 客隊['控球係數'] * (0.85 if 客傷 else 1.0) * (0.9 if 客疲 else 1.0)
+    def 預測單場(self, h_name, a_name):
+        h, a = self.teams.get(h_name), self.teams.get(a_name)
+        # 泊松分佈運算矩陣
+        matrix = np.outer(poisson.pmf(np.arange(6), h['控球係數']*2.8), 
+                          poisson.pmf(np.arange(6), a['控球係數']*2.5))
         
-        # 戰術修正係數
-        主權重 *= self.計算戰術相剋(主隊['風格'], 客隊['風格'])
+        home_win = np.sum(np.tril(matrix, -1))
+        draw = np.sum(np.diag(matrix))
+        away_win = np.sum(np.triu(matrix, 1))
+        score_idx = np.unravel_index(np.argmax(matrix), matrix.shape)
         
-        # 執行 10 萬次模擬 (Dixon-Coles 零膨脹邏輯)
-        模擬次數 = 100000
-        進球_主 = np.random.poisson(主權重 * 2.5, 模擬次數)
-        進球_客 = np.random.poisson(客權重 * 2.2, 模擬次數)
-        
-        return 進球_主, 進球_客
+        return {
+            "主勝": home_win, "平": draw, "客勝": away_win,
+            "波膽": f"{score_idx[0]}:{score_idx[1]}",
+            "大分機率": 1 - np.sum(matrix[0:3, 0:3])
+        }
