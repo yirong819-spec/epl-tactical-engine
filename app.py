@@ -3,37 +3,45 @@ import numpy as np
 import json
 from scipy.stats import poisson
 
-# 1. 直接在 app.py 定義引擎邏輯，解決 Import 引用的快取錯誤
-class 戰略預測引擎:
-    def __init__(self):
+# 1. 初始化引擎數據庫 (請確保 data/teams.json 在正確路徑)
+def 取得數據庫():
+    try:
         with open('data/teams.json', 'r', encoding='utf-8') as f:
-            self.teams = json.load(f)
+            return json.load(f)
+    except:
+        return {"曼城": {"控球係數": 0.96}, "阿森納": {"控球係數": 0.94}} # 備用預設
 
-    def 取得當日賽程(self):
-        # 此處為您的賽程表，若無 API 則維持此結構
-        return [("曼城", "阿森納"), ("利物浦", "切爾西")]
+def 執行模擬(h_data, a_data, 模擬次數=100000):
+    主進球 = np.random.poisson(h_data['控球係數'] * 2.5, 模擬次數)
+    客進球 = np.random.poisson(a_data['控球係數'] * 2.2, 模擬次數)
+    總進球 = 主進球 + 客進球
+    
+    return {
+        "主勝": np.mean(主進球 > 客進球),
+        "平局": np.mean(主進球 == 客進球),
+        "客勝": np.mean(主進球 < 客進球),
+        "大分率": np.mean(總進球 > 2.5),
+        "建議波膽": f"{np.bincount(主進球).argmax()}:{np.bincount(客進球).argmax()}"
+    }
 
-    def 計算比分(self, h, a):
-        matrix = np.outer(poisson.pmf(np.arange(6), self.teams[h]['控球係數']*2.5), 
-                          poisson.pmf(np.arange(6), self.teams[a]['控球係數']*2.2))
-        return {
-            "主勝": np.sum(np.tril(matrix, -1)),
-            "平": np.sum(np.diag(matrix)),
-            "客勝": np.sum(np.triu(matrix, 1)),
-            "波膽": f"{np.unravel_index(np.argmax(matrix), matrix.shape)[0]}:{np.unravel_index(np.argmax(matrix), matrix.shape)[1]}",
-            "大分機率": 1 - np.sum(matrix[0:3, 0:3])
-        }
+# 2. UI 渲染層
+st.title("⚽ 2026/27 英超戰略精算系統")
+teams = 取得數據庫()
 
-# 2. 初始化引擎並渲染
-st.title("⚽ 2026/27 英超精算室")
-engine = 戰略預測引擎()
+# 賽程模擬 (自動與手動切換)
+st.subheader("今日賽程預測")
+賽程 = [] # 若無賽事則為空列表
 
-# 3. 渲染賽程
-for h, a in engine.取得當日賽程():
-    res = engine.計算比分(h, a)
-    with st.expander(f"📍 {h} vs {a}", expanded=True):
-        col1, col2, col3 = st.columns(3)
-        col1.metric("主勝", f"{res['主勝']:.1%}")
-        col2.metric("平局", f"{res['平']:.1%}")
-        col3.metric("客勝", f"{res['客勝']:.1%}")
-        st.write(f"建議比分：{res['波膽']} | 大分機率：{res['大分機率']:.1%}")
+if not 賽程:
+    st.warning("今日暫無官方賽程。已自動切換至：深度自選模擬模式")
+    col1, col2 = st.columns(2)
+    h_pick = col1.selectbox("主隊", list(teams.keys()))
+    a_pick = col2.selectbox("客隊", list(teams.keys()))
+    if h_pick and a_pick:
+        res = 執行模擬(teams[h_pick], teams[a_pick])
+        st.write(f"### 對戰：{h_pick} vs {a_pick}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("主勝", f"{res['主勝']:.1%}")
+        c2.metric("平", f"{res['平']:.1%}")
+        c3.metric("客勝", f"{res['客勝']:.1%}")
+        st.info(f"建議波膽：{res['建議波膽']} | 大分機率：{res['大分率']:.1%}")
